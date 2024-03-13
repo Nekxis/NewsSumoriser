@@ -46,8 +46,8 @@ embedding_model_name = "nomic-embed-text"
 embedding_model_safe_name = purify_name(embedding_model_name)
 embeddings = OllamaEmbeddings(model=embedding_model_name)
 embeddings_chunk_size = 200  # it is not recommended to play with this value, but if anything, make it smaller
-embeddings_article_limit = 10  # adjust 5 - 100 depending on how fast 'database vectorization' runs
-embeddings_buffer_stops = ["\n\n\n", "\n\n", "\n"]  # for additional speed, but less cohesion: remove ", "
+embeddings_article_limit = 100  # adjust 5 - 100 depending on how fast 'database vectorization' runs
+embeddings_buffer_stops = ["\n\n\n", "\n\n", "\n", ". ", ", ", " ", ""]  # N of elements LTR [4 - 7]  # for additional speed, but less cohesion: remove ", "
 # ^ buffer - RecursiveCharacterTextSplitter creates a buffer traversing the web page,
 #            moving left to right stopping at every buffer stop
 # ^ this functionality appears to be bugged, as in the documentation it's described to work differently.
@@ -60,8 +60,7 @@ if not exists('store/' + embedding_model_safe_name + '.faiss'):
 
 db = FAISS.load_local(folder_path='store',
                       embeddings=embeddings,
-                      index_name=embedding_model_safe_name,
-                      allow_dangerous_deserialization=True)
+                      index_name=embedding_model_safe_name)
 
 
 def _extract_from_quote(text: str):
@@ -96,7 +95,7 @@ def _web_query_google_lookup(prompt_text: str):
     extra_params = {
         'tbm': 'nws',  # news only
     }
-    tbs = 'qdr:m'  # last month only
+    tbs = 'qdr:w'  # last month only
     # anything that will be embedded as something new and from this date, will be a partial paraphrase of this text
     embed_query = f"{current_month_year} news on {prompt_core}"
     embedding_prefix = f"date: {current_month_year}, text: "
@@ -133,7 +132,7 @@ def _web_query_google_lookup(prompt_text: str):
 
     # return the document with the highest prompt similarity score (for now only browsing the first search result)
     embedding_vector = embeddings.embed_query(prompt_text)
-    docs_and_scores = db.similarity_search_by_vector(embedding_vector)
+    docs_and_scores = db.similarity_search_by_vector(embedding_vector, k=round(token_limit/120))
 
     print(f"{Fore.CYAN}Database search completed.{Fore.RESET}")
 
@@ -163,7 +162,7 @@ def _web_chain_function(prompt_dict: dict):
          "You are a search results interpreter. Your job is to write an article based on the provided context."
          "Your job is to convert all the search results you were given into a long, comprehensive and clean output."
          "Use provided search results data to answer the user request to the best of your ability."
-         "Try to provide extremely long comprehensive and danse description of information that you find valuable, try to include as much details as possible."
+         "Provide extremely long comprehensive and danse description of information that you find valuable, include as much details as possible."
          "You don't have a knowledge cutoff. "
          "It is currently " +
          datetime.date.today().strftime("%B %Y")),
