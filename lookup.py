@@ -40,7 +40,7 @@ class Query:
         self.db_embed_query = prompt_core  # query to search by
 
         # this prompt works well for Google News searches
-        self.web_query = f"latest {prompt_core} news comprehensive overview "
+        self.web_query = prompt_core
         self.web_extra_params = {
             'tbm': 'nws',  # news only
         }
@@ -87,7 +87,7 @@ def remove(text: str, wordlist: list):
 
 model_name = "mixtral:8x7b-instruct-v0.1-q5_K_M"  # "llama2-uncensored:7b"
 model_safe_name = purify_name(model_name)
-token_limit = 8192  # depending on VRAM, try 2048, 3072 or 4096. 2048 works great on 4GB VRAM
+token_limit = 32768  # depending on VRAM, try 2048, 3072 or 4096. 2048 works great on 4GB VRAM
 llm = Ollama(model=model_name)
 
 embedding_model_name = "nomic-embed-text"  # this is not a good model, change asap
@@ -95,7 +95,7 @@ embedding_model_safe_name = purify_name(embedding_model_name)
 embeddings = OllamaEmbeddings(model=embedding_model_name)
 
 embeddings_chunk_size = 600  # it is not recommended to play with this value, [100 - 600]
-embeddings_article_limit = 50  # adjust depending on how fast 'database vectorization' runs [3 - 100]
+embeddings_article_limit = 10  # adjust depending on how fast 'database vectorization' runs [3 - 100]
 embeddings_buffer_stops = ["\n\n\n", "\n\n", "\n", ". ", ", ", " ", ""]  # N of elements LTR [4 - 7]
 
 encoder = tiktoken.get_encoding("cl100k_base")
@@ -122,7 +122,7 @@ def populate_db_with_google_search(database: FAISS, query: Query):
     url_list = list(
         search(
             query=query.web_query,
-            stop=embeddings_article_limit,
+            num=embeddings_article_limit,
             lang='en',
             safe='off',
             tbs=query.web_tbs,
@@ -134,13 +134,15 @@ def populate_db_with_google_search(database: FAISS, query: Query):
         documents = WebBaseLoader(url).load_and_split(RecursiveCharacterTextSplitter(
             separators=embeddings_buffer_stops,
             chunk_size=embeddings_chunk_size,
-            chunk_overlap=0,
+            chunk_overlap=200,
             keep_separator=False,
             strip_whitespace=True))
 
         for document in documents:
             if is_text_junk(document.page_content):
                 documents.remove(document)
+                if len(documents) == 0:
+                    continue
 
             document.page_content = remove(document.page_content, ['\n', '`'])
             document.page_content = (query.db_embedding_prefix +
@@ -150,7 +152,12 @@ def populate_db_with_google_search(database: FAISS, query: Query):
 
         # fixme: 1 out of 3 times, this throws an exception:
         #        ValueError: not enough values to unpack (expected 2, got 1)
-        database.add_documents(documents=documents, embeddings=embeddings)
+        # TODO: go further into this issue
+        if len(documents) != 0:
+            database.add_documents(documents=documents, embeddings=embeddings)
+        else:
+            print(f"{Fore.CYAN}Source is junk{Fore.RESET}")
+
 
     db_name = embedding_model_safe_name + query.db_save_file_extension
     database.save_local(folder_path='store', index_name=db_name)
