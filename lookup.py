@@ -14,7 +14,6 @@ from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.document_loaders import WebBaseLoader
 
 from os.path import exists
-
 import tiktoken
 import datetime
 
@@ -131,33 +130,36 @@ def populate_db_with_google_search(database: FAISS, query: Query):
     print(f"{Fore.CYAN}Web search completed.{Fore.RESET}")
 
     for url in url_list:
-        documents = WebBaseLoader(url).load_and_split(RecursiveCharacterTextSplitter(
-            separators=embeddings_buffer_stops,
-            chunk_size=embeddings_chunk_size,
-            chunk_overlap=200,
-            keep_separator=False,
-            strip_whitespace=True))
+        try:
+           website = WebBaseLoader(url)
+        except ConnectionError as e:
+            print(f"Error encountered: {e}")
+            continue
 
-        for document in documents:
-            if is_text_junk(document.page_content):
-                documents.remove(document)
-                if len(documents) == 0:
+        chunks = website.load_and_split(RecursiveCharacterTextSplitter(
+        separators=embeddings_buffer_stops,
+        chunk_size=embeddings_chunk_size,
+        chunk_overlap=200,
+        keep_separator=False,
+        strip_whitespace=True))
+
+        for chunk in chunks:
+            if is_text_junk(chunk.page_content):
+                chunks.remove(chunk)
+                if len(chunks) == 0:
                     continue
 
-            document.page_content = remove(document.page_content, ['\n', '`'])
-            document.page_content = (query.db_embedding_prefix +
-                                     document.page_content +
+            chunk.page_content = remove(chunk.page_content, ['\n', '`'])
+            chunk.page_content = (query.db_embedding_prefix +
+                                     chunk.page_content +
                                      query.db_embedding_postfix +
                                      '\n')
 
         # fixme: 1 out of 3 times, this throws an exception:
         #        ValueError: not enough values to unpack (expected 2, got 1)
         # TODO: go further into this issue
-        if len(documents) != 0:
-            database.add_documents(documents=documents, embeddings=embeddings)
-        else:
-            print(f"{Fore.CYAN}Source is junk{Fore.RESET}")
-
+        if len(chunks) != 0:
+            database.add_documents(documents=chunks, embeddings=embeddings)
 
     db_name = embedding_model_safe_name + query.db_save_file_extension
     database.save_local(folder_path='store', index_name=db_name)
