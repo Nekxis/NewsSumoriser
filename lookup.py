@@ -3,7 +3,7 @@ from typing import Literal, Union
 
 from colorama import Fore
 from colorama import Style
-
+from requests.exceptions import ConnectionError
 from langchain_community.llms.ollama import Ollama
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -118,46 +118,44 @@ def get_db_by_name(db_name: str) -> FAISS:
 def populate_db_with_google_search(database: FAISS, query: Query):
     print(f"{Fore.CYAN}{Style.BRIGHT}Searching for:{Style.RESET_ALL}", query.web_query)
 
-    url_list = list(
-        search(
-            query=query.web_query,
-            num=embeddings_article_limit,
-            lang='en',
-            safe='off',
-            tbs=query.web_tbs,
-            extra_params=query.web_extra_params))
+    url_list = search(
+        query=query.web_query,
+        stop=embeddings_article_limit,
+        lang='en',
+        safe='off',
+        tbs=query.web_tbs,
+        extra_params=query.web_extra_params)
 
     print(f"{Fore.CYAN}Web search completed.{Fore.RESET}")
 
     for url in url_list:
+        url_handle = WebBaseLoader(url)
+
+        # try downloading web content
         try:
-           website = WebBaseLoader(url)
-        except ConnectionError as e:
-            print(f"Error encountered: {e}")
+            document = url_handle.load()
+        except ConnectionError:
             continue
 
-        chunks = website.load_and_split(RecursiveCharacterTextSplitter(
-        separators=embeddings_buffer_stops,
-        chunk_size=embeddings_chunk_size,
-        chunk_overlap=200,
-        keep_separator=False,
-        strip_whitespace=True))
+        text_splitter = RecursiveCharacterTextSplitter(
+            separators=embeddings_buffer_stops,
+            chunk_size=embeddings_chunk_size,
+            chunk_overlap=200,
+            keep_separator=False,
+            strip_whitespace=True)
+
+        chunks = text_splitter.split_documents(document)
 
         for chunk in chunks:
             if is_text_junk(chunk.page_content):
                 chunks.remove(chunk)
-                if len(chunks) == 0:
-                    continue
+                continue
 
             chunk.page_content = remove(chunk.page_content, ['\n', '`'])
             chunk.page_content = (query.db_embedding_prefix +
-                                     chunk.page_content +
-                                     query.db_embedding_postfix +
-                                     '\n')
+                                  chunk.page_content +
+                                  query.db_embedding_postfix)
 
-        # fixme: 1 out of 3 times, this throws an exception:
-        #        ValueError: not enough values to unpack (expected 2, got 1)
-        # TODO: go further into this issue
         if len(chunks) != 0:
             database.add_documents(documents=chunks, embeddings=embeddings)
 
@@ -165,7 +163,6 @@ def populate_db_with_google_search(database: FAISS, query: Query):
     database.save_local(folder_path='store', index_name=db_name)
 
     print(f"{Fore.CYAN}Document vectorization completed.{Fore.RESET}")
-
 
 # this general db will be used to save AI responses,
 # might become useful as the responses are better than the input
